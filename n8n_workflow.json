@@ -1,0 +1,285 @@
+{
+  "name": "Deep Research Agent — Memory-Aware Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "research",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Receive Query",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-empty",
+              "leftValue": "={{ $json.body.query }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-validate",
+      "name": "Query Provided?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: 'Missing or empty query. Send { \"query\": \"your question\" }' }) }}",
+        "options": { "responseCode": 400 }
+      },
+      "id": "node-err-empty",
+      "name": "Missing Query Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [640, 460]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://host.docker.internal:8000/health",
+        "options": {}
+      },
+      "id": "node-health",
+      "name": "Check Agent Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-budget",
+              "leftValue": "={{ $json.session_cost }}",
+              "rightValue": 0.05,
+              "operator": { "type": "number", "operation": "lt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-budget-gate",
+      "name": "Budget Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: 'Session budget exhausted ($0.05 limit). Call POST /session/end to save and reset.', session_cost: $('Check Agent Health').item.json.session_cost }) }}",
+        "options": { "responseCode": 402 }
+      },
+      "id": "node-err-budget",
+      "name": "Budget Exhausted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1080, 360]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/memory/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Receive Query').item.json.body.query, n_results: 4 }) }}",
+        "options": {}
+      },
+      "id": "node-mem-search",
+      "name": "Search Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-score",
+              "leftValue": "={{ $json.best_score }}",
+              "rightValue": 0.4,
+              "operator": { "type": "number", "operation": "gte" }
+            },
+            {
+              "id": "cond-chunks",
+              "leftValue": "={{ $json.num_chunks }}",
+              "rightValue": 2,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-mem-sufficient",
+      "name": "Memory Sufficient?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ answer: $json.assembled_text, source: 'memory_only', memory_score: $json.best_score, memory_chunks: $json.num_chunks, web_searches: 0, note: 'Answered from memory — zero web search cost.' }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "node-mem-answer",
+      "name": "Return Memory Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Receive Query').item.json.body.query }) }}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "node-full-research",
+      "name": "Run Full Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-budget-warn",
+              "leftValue": "={{ $json.budget.session_cost_usd }}",
+              "rightValue": 0.04,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-budget-check-post",
+      "name": "Budget > 80%?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1760, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/session/end",
+        "options": {}
+      },
+      "id": "node-auto-save",
+      "name": "Auto-Save Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 100]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify({ ...($('Run Full Research').item.json), session_auto_saved: true, save_summary: $json.summary }) }}",
+        "options": {}
+      },
+      "id": "node-merge-save",
+      "name": "Merge Save Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2200, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "node-return-saved",
+      "name": "Return Result (Saved)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2420, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Run Full Research').item.json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "node-return-normal",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1980, 300]
+    }
+  ],
+  "connections": {
+    "Receive Query": {
+      "main": [[{ "node": "Query Provided?", "type": "main", "index": 0 }]]
+    },
+    "Query Provided?": {
+      "main": [
+        [{ "node": "Check Agent Health", "type": "main", "index": 0 }],
+        [{ "node": "Missing Query Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Agent Health": {
+      "main": [[{ "node": "Budget Available?", "type": "main", "index": 0 }]]
+    },
+    "Budget Available?": {
+      "main": [
+        [{ "node": "Search Memory", "type": "main", "index": 0 }],
+        [{ "node": "Budget Exhausted", "type": "main", "index": 0 }]
+      ]
+    },
+    "Search Memory": {
+      "main": [[{ "node": "Memory Sufficient?", "type": "main", "index": 0 }]]
+    },
+    "Memory Sufficient?": {
+      "main": [
+        [{ "node": "Return Memory Answer", "type": "main", "index": 0 }],
+        [{ "node": "Run Full Research", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run Full Research": {
+      "main": [[{ "node": "Budget > 80%?", "type": "main", "index": 0 }]]
+    },
+    "Budget > 80%?": {
+      "main": [
+        [{ "node": "Auto-Save Session", "type": "main", "index": 0 }],
+        [{ "node": "Return Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Auto-Save Session": {
+      "main": [[{ "node": "Merge Save Info", "type": "main", "index": 0 }]]
+    },
+    "Merge Save Info": {
+      "main": [[{ "node": "Return Result (Saved)", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "meta": { "instanceId": "deep-research-agent" }
+}
