@@ -13,7 +13,7 @@ User Query
      │
      ▼
 ┌────────────────────────────────────────────────────────────┐
-│               n8n Workflow (Orchestration)                  │
+│               n8n Workflow (Orchestration)                 │
 │                                                            │
 │  Webhook ─→ Validate ─→ Health Check ─→ Budget Gate        │
 │                                            │               │
@@ -27,7 +27,7 @@ User Query
 │                                   /              \         │
 │                                  /                \        │
 │                           YES: Return       NO: Full       │
-│                           Memory Answer     Research        │
+│                           Memory Answer     Research       │
 │                                                │           │
 │                                                ▼           │
 │                                         Budget > 80%?      │
@@ -39,12 +39,12 @@ User Query
                               │
                               ▼
 ┌────────────────────────────────────────────────────────────┐
-│                  Full Research Pipeline                     │
+│                  Full Research Pipeline                    │
 │                                                            │
 │  1. Decompose query ─→ 2–4 sub-questions  (Claude Haiku)   │
 │  2. For each sub-question, Claude decides:                 │
 │       query_memory ─→ 3-tier memory (working + ChromaDB)   │
-│       web_search   ─→ Tavily (max 3/query, budget-gated)  │
+│       web_search   ─→ Tavily (max 3/query, budget-gated)   │
 │  3. Context Assembler packs results within 2K token limit  │
 │  4. Synthesise final answer  (Claude Sonnet)               │
 │  5. Extract facts ─→ store in ChromaDB for future queries  │
