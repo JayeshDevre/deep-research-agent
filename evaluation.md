@@ -25,7 +25,7 @@
 Routing is split across two layers, each handling what it does best:
 
 **Outer layer — n8n workflow (deterministic, zero cost):**
-The n8n workflow makes the first routing decision: before any LLM call, it queries memory directly via `POST /memory/search`. If memory returns high-quality results (score ≥ 0.75, ≥ 2 chunks), n8n short-circuits and returns the memory answer immediately — zero LLM cost, zero web search cost. Only when memory is insufficient does n8n forward to the full research pipeline.
+The n8n workflow makes the first routing decision: before any LLM call, it queries memory directly via `POST /memory/search`. If memory returns high-quality results (score ≥ 0.40, ≥ 2 chunks), n8n short-circuits and returns the memory answer immediately — zero LLM cost, zero web search cost. Only when memory is insufficient does n8n forward to the full research pipeline.
 
 n8n also handles memory management: after each full research query, it checks if the session budget has exceeded 80%. If so, it auto-saves the session to episodic memory via `POST /session/end`, ensuring knowledge is persisted before budget runs out.
 
