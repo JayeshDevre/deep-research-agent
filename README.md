@@ -10,39 +10,45 @@ Built with **Claude** (Anthropic) for reasoning, **ChromaDB** for vector memory,
 
 ```
 User Query
-    ↓
-┌──────────────────────────────────────────────────────────────┐
-│                  n8n Workflow (Orchestration)                 │
-│                                                              │
-│  Webhook → Validate → Health Check → Budget Gate             │
-│                                        ↓                     │
-│                                 Search Memory                │
-│                                    (zero cost)               │
-│                                        ↓                     │
-│                            Memory Sufficient?                │
-│                           (score ≥ 0.40, ≥ 2 chunks)        │
-│                          ↙                    ↘              │
-│                  YES: Return            NO: Full Research     │
-│                  Memory Answer          via FastAPI           │
-│                                              ↓               │
-│                                       Budget > 80%?          │
-│                                      ↙           ↘          │
-│                              Auto-Save        Return Result  │
-│                              Session                         │
-└──────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────┐
-│                  Full Research Pipeline                       │
-│                                                              │
-│  1. Decompose question → 2–4 sub-questions (Claude Haiku)    │
-│  2. For each sub-question, Claude decides:                   │
-│     • query_memory → 3-tier memory (working + ChromaDB)      │
-│     • web_search   → Tavily (max 3/query, budget-gated)      │
-│  3. Context Assembler packs results within 2K token limit    │
-│  4. Synthesise final answer (Claude Sonnet)                  │
-│  5. Extract facts → store in ChromaDB for future queries     │
-└──────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌────────────────────────────────────────────────────────────┐
+│               n8n Workflow (Orchestration)                  │
+│                                                            │
+│  Webhook ─→ Validate ─→ Health Check ─→ Budget Gate        │
+│                                            │               │
+│                                            ▼               │
+│                                     Search Memory          │
+│                                      (zero cost)           │
+│                                            │               │
+│                                            ▼               │
+│                                   Memory Sufficient?       │
+│                                (score ≥ 0.40, ≥ 2 chunks)  │
+│                                   /              \         │
+│                                  /                \        │
+│                           YES: Return       NO: Full       │
+│                           Memory Answer     Research        │
+│                                                │           │
+│                                                ▼           │
+│                                         Budget > 80%?      │
+│                                          /        \        │
+│                                         /          \       │
+│                                  Auto-Save     Return      │
+│                                  Session       Result      │
+└────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────┐
+│                  Full Research Pipeline                     │
+│                                                            │
+│  1. Decompose query ─→ 2–4 sub-questions  (Claude Haiku)   │
+│  2. For each sub-question, Claude decides:                 │
+│       query_memory ─→ 3-tier memory (working + ChromaDB)   │
+│       web_search   ─→ Tavily (max 3/query, budget-gated)  │
+│  3. Context Assembler packs results within 2K token limit  │
+│  4. Synthesise final answer  (Claude Sonnet)               │
+│  5. Extract facts ─→ store in ChromaDB for future queries  │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### Memory Tiers
