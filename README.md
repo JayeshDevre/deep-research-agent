@@ -1,8 +1,12 @@
 # Deep Research Agent
 
+Most agents ignore cost. This one enforces a **$0.05/session budget** and builds memory over time — so repeated queries get cheaper and faster without sacrificing answer quality.
+
 A memory-constrained AI research agent that answers complex, multi-part questions by checking its own memory before searching the web — all within strict token and cost budgets.
 
 Built with **Claude** (Anthropic) for reasoning, **ChromaDB** for vector memory, **Tavily** for web search, **FastAPI** as the backend, and **n8n** for workflow orchestration.
+
+> For architecture trade-offs, constraint decisions, and business impact analysis, see [evaluation.md](evaluation.md).
 
 ---
 
@@ -147,6 +151,8 @@ Opens a visual dashboard at http://localhost:8501 with live budget tracking, mem
 ```bash
 pytest tests/ -v
 ```
+
+4 test modules cover budget tracking (thread safety), working memory eviction, context assembly (token budget), and query decomposition.
 
 ---
 
