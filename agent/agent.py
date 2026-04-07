@@ -20,6 +20,7 @@ Flow per session end:
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Thread
 from typing import Any
 
 import anthropic
@@ -168,6 +169,42 @@ class ResearchAgent:
                 "web_searches": 0, "tool_calls": 0, "trace": [], "budget": self.budget.summary(),
             }
 
+        # ── Tier 1: working memory exact-match cache ────────────────
+        # Same question asked earlier this session → return instantly, zero cost.
+        cached_answer = self._working_memory_cache_lookup(user_query)
+        if cached_answer:
+            logger.info("Tier 1 cache hit — returning cached answer")
+            return {
+                "answer": cached_answer,
+                "sub_questions": [user_query], "sources_used": [],
+                "memory_hits": 1, "web_searches": 0, "tool_calls": 0,
+                "trace": [{"sub_question": user_query, "answer": cached_answer,
+                           "trace": [{"tool": "query_memory", "query": user_query, "hit": True}]}],
+                "budget": self.budget.summary(),
+            }
+
+        # ── Tier 2/3: episodic + fact memory ───────────────────────
+        # High-quality memory hits → synthesise with 1 cheap Haiku call
+        # instead of running the full 5-7 call pipeline.
+        mem_chunks = self.episodic.query(user_query)
+        strong_hits = [c for c in mem_chunks if c["score"] >= 0.50]
+        if len(strong_hits) >= 2:
+            logger.info("Tier 2/3 memory sufficient (%d chunks, score≥0.50) — skipping full pipeline", len(strong_hits))
+            mem_answer = self._synthesise_from_memory(user_query, strong_hits)
+            self.working.add("user",      user_query)
+            self.working.add("assistant", mem_answer)
+            self._log(f"Q: {user_query}")
+            self._log(f"A (from memory): {mem_answer}")
+            return {
+                "answer": mem_answer,
+                "sub_questions": [user_query], "sources_used": [],
+                "memory_hits": len(strong_hits), "web_searches": 0, "tool_calls": 1,
+                "trace": [{"sub_question": user_query, "answer": mem_answer,
+                           "trace": [{"tool": "query_memory", "query": user_query, "hit": True}]}],
+                "budget": self.budget.summary(),
+            }
+        # ────────────────────────────────────────────────────────────
+
         self.budget.reset_query()
         self._sources_used = []
         total_tool_calls = 0
@@ -205,8 +242,8 @@ class ResearchAgent:
         # Step 3: Synthesise
         final_answer = self._synthesise(user_query, partial_answers)
 
-        # Step 4: Extract + store facts (best-effort)
-        self._extract_and_store_facts(final_answer)
+        # Step 4: Extract + store facts in background — don't block the result
+        Thread(target=self._extract_and_store_facts, args=(final_answer,), daemon=True).start()
 
         # Step 5: Update working memory
         self.working.add("user",      user_query)
@@ -267,12 +304,18 @@ class ResearchAgent:
         Returns:
             (answer_text, tool_call_count, memory_hit_count, tool_trace)
         """
+        # Pre-fetch memory before entering the tool-use loop.
+        # Injecting it directly removes one full LLM round-trip
+        # (Claude no longer needs to decide to call query_memory first).
+        prefetched = self._run_query_memory(sub_question)
+        memory_context = f"\n\nRELEVANT MEMORY:\n{prefetched}" if "No results" not in prefetched else ""
+
         system = _SYSTEM_PROMPT.format(
             context_limit=CONTEXT_TOKEN_LIMIT,
             session_cost_limit=SESSION_COST_LIMIT,
             searches_remaining=MAX_WEB_SEARCHES - self.budget.web_searches_this_query,
             working_memory=self.working.as_text() or "None yet.",
-        )
+        ) + memory_context
 
         messages: list[dict[str, Any]] = [{"role": "user", "content": sub_question}]
         tool_call_count  = 0
@@ -280,6 +323,10 @@ class ResearchAgent:
         tool_trace:    list[dict[str, Any]] = []
 
         for iteration in range(MAX_TOOL_ITERATIONS):
+            if self.budget.over_session_budget():
+                logger.warning("Budget exhausted mid-loop — stopping sub-question early")
+                break
+
             try:
                 response = self.anthropic.messages.create(
                     model=ANSWER_MODEL,
@@ -359,15 +406,14 @@ class ResearchAgent:
         return f"Unknown tool: {name}"
 
     def _run_web_search(self, query: str) -> str:
-        if not self.budget.can_search():
-            logger.info("Web search blocked — limit reached")
-            return f"CONSTRAINT: Web search limit reached (max {MAX_WEB_SEARCHES} per query). Use available context."
-
         if self.budget.over_session_budget():
             return "CONSTRAINT: Session cost budget exhausted."
 
+        if not self.budget.claim_search():
+            logger.info("Web search blocked — limit reached")
+            return f"CONSTRAINT: Web search limit reached (max {MAX_WEB_SEARCHES} per query). Use available context."
+
         chunks = tavily_search(query, self.tavily)
-        self.budget.record_web_search()
 
         if not chunks:
             return "No results found."
@@ -440,6 +486,41 @@ class ResearchAgent:
                 elif isinstance(content, str):
                     return content.strip()
         return "No answer could be generated within the tool call limit."
+
+    def _working_memory_cache_lookup(self, query: str) -> str | None:
+        """Return a cached answer if the same question was asked this session."""
+        turns = self.working.get_turns()
+        query_lower = query.strip().lower()
+        for i, turn in enumerate(turns):
+            if turn["role"] == "user" and turn["content"].strip().lower() == query_lower:
+                # Return the immediately following assistant turn if it exists
+                if i + 1 < len(turns) and turns[i + 1]["role"] == "assistant":
+                    return turns[i + 1]["content"]
+        return None
+
+    def _synthesise_from_memory(self, query: str, chunks: list[dict[str, Any]]) -> str:
+        """Answer a query using only memory chunks — 1 Haiku call instead of full pipeline."""
+        context = assemble(chunks, reserve_tokens=0)
+        prompt = (
+            f"Using only the research context below, answer this question concisely.\n\n"
+            f"Question: {query}\n\n"
+            f"Context:\n{context}"
+        )
+        try:
+            response = self.anthropic.messages.create(
+                model=ANSWER_MODEL,
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            self.budget.record_llm_call(
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                ANSWER_MODEL,
+            )
+            return response.content[0].text.strip()
+        except anthropic.APIError:
+            logger.exception("Memory synthesis failed")
+            return context  # fall back to raw context
 
     def _log(self, line: str) -> None:
         self._session_log.append(line)

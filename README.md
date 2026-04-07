@@ -146,6 +146,8 @@ streamlit run ui/app.py
 
 Opens a visual dashboard at http://localhost:8501 with live budget tracking, memory stats, and reasoning traces.
 
+![Streamlit dashboard](screenshots/streamlit_ui.png)
+
 ### 7. Run tests
 
 ```bash
@@ -157,6 +159,8 @@ pytest tests/ -v
 ---
 
 ## n8n Workflow
+
+![n8n workflow](screenshots/n8n_workflow.png)
 
 The n8n workflow handles **query routing** and **memory management** — the two responsibilities the orchestration layer is responsible for.
 

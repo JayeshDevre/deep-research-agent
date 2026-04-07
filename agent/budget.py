@@ -87,12 +87,22 @@ class BudgetTracker:
             model, input_tokens, output_tokens, cost, self.session_cost,
         )
 
-    def record_web_search(self) -> None:
-        with self._lock:
-            self.web_searches_this_query += 1
-            count = self.web_searches_this_query
-        logger.debug("Web search #%d this query", count)
+    def claim_search(self) -> bool:
+        """Atomically check and reserve a web search slot.
 
+        Returns True if a slot was available and has been reserved,
+        False if the limit was already reached. Combines the check and
+        increment in one lock acquisition to eliminate the TOCTOU race
+        when sub-questions run in parallel threads.
+        """
+        with self._lock:
+            if self.web_searches_this_query < MAX_WEB_SEARCHES:
+                self.web_searches_this_query += 1
+                logger.debug("Web search #%d this query", self.web_searches_this_query)
+                return True
+            return False
+
+    # Keep for backward-compat (n8n health endpoint reads this via /health)
     def can_search(self) -> bool:
         with self._lock:
             return self.web_searches_this_query < MAX_WEB_SEARCHES
